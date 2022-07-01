@@ -3,12 +3,14 @@
  *
  * (c)2022 Mark J. Stock <markjstock@gmail.com>
  *
- * v0.7  use pinned memory and one thread per gpu/stream
+ * v0.7  use page-locked (pinned) memory and one thread per gpu/stream
  */
 
 #include <vector>
 #include <random>
 #include <chrono>
+
+#include <omp.h>
 
 #include <hip/hip_runtime.h>
 
@@ -306,7 +308,10 @@ int main(int argc, char **argv) {
   // allocate space for all sources, part of targets
   const int32_t srcsize = nsrcpad*sizeof(FLOAT);
   const int32_t trgsize = ntargperstrm*sizeof(FLOAT);
-  for (int32_t i=0; i<nstreams; ++i) {
+  //for (int32_t i=0; i<nstreams; ++i) {
+  #pragma omp parallel num_threads(nstreams)
+  {
+    const int32_t i = omp_get_thread_num();
     hipSetDevice(i);
     hipStreamCreate(&stream[i]);
 
@@ -327,9 +332,11 @@ int main(int argc, char **argv) {
   start = std::chrono::system_clock::now();
 
   // now perform the data movement and setting
-  for (int32_t i=0; i<nstreams; ++i) {
-
-    hipSetDevice(i);
+  //for (int32_t i=0; i<nstreams; ++i) {
+  #pragma omp parallel num_threads(nstreams)
+  {
+    const int32_t i = omp_get_thread_num();
+    //hipSetDevice(i);
 
     // set some and move other data
     hipMemsetAsync (dtu[i], 0, trgsize, stream[i]);
@@ -356,6 +363,9 @@ int main(int argc, char **argv) {
   //}
 
   //for (int32_t i=0; i<nstreams; ++i) {
+  //#pragma omp parallel num_threads(nstreams)
+  //{
+    //const int32_t i = omp_get_thread_num();
     // get this device and stream
     //hipSetDevice(i);
 
@@ -373,7 +383,10 @@ int main(int argc, char **argv) {
   }
 
   // moving these calls inside of the kernel loop slows things down a lot
-  for (int32_t i=0; i<nstreams; ++i) {
+  //for (int32_t i=0; i<nstreams; ++i) {
+  #pragma omp parallel num_threads(nstreams)
+  {
+    const int32_t i = omp_get_thread_num();
     // pull data back down
     hipMemcpyAsync (htu + i*ntargperstrm, dtu[i], trgsize, hipMemcpyDeviceToHost, stream[i]);
     hipMemcpyAsync (htv + i*ntargperstrm, dtv[i], trgsize, hipMemcpyDeviceToHost, stream[i]);
@@ -393,7 +406,10 @@ int main(int argc, char **argv) {
   printf( "    results ( %g %g %g %g %g %g)\n", htu[0], htv[0], htw[0], htu[npart-1], htv[npart-1], htw[npart-1]);
 
   // free resources, after timer
-  for (int32_t i=0; i<nstreams; ++i) {
+  //for (int32_t i=0; i<nstreams; ++i) {
+  #pragma omp parallel num_threads(nstreams)
+  {
+    const int32_t i = omp_get_thread_num();
     hipFree(dsx[i]);
     hipFree(dsy[i]);
     hipFree(dsz[i]);
