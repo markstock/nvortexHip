@@ -261,7 +261,7 @@ int main(int argc, char **argv) {
   std::chrono::duration<double> elapsed_seconds = end-start;
   double time = elapsed_seconds.count();
 
-  printf( "  host total time( %g s ) and flops( %g GFlop/s )\n", time, 1.e-9 * (double)npart*(6+20*(double)npart)/time);
+  printf( "  host total time( %g s ) and flops( %g GFlop/s )\n", time, 1.e-9 * (double)npart*(7+20*(double)npart)/time);
   printf( "    results ( %g %g %g %g %g %g)\n", htu[0], htv[0], htw[0], htu[npart-1], htv[npart-1], htw[npart-1]);
 
   // copy the results into temp vectors
@@ -362,7 +362,7 @@ int main(int argc, char **argv) {
   end = std::chrono::system_clock::now();
   elapsed_seconds = end-start;
   time = elapsed_seconds.count();
-  printf( "  device total time( %g s ) and flops( %g GFlop/s )\n", time, 1.e-9 * (double)npart*(6+20*(double)npart)/time);
+  printf( "  device total time( %g s ) and flops( %g GFlop/s )\n", time, 1.e-9 * (double)npart*(7+20*(double)npart)/time);
   printf( "    results ( %g %g %g %g %g %g)\n", htu[0], htv[0], htw[0], htu[npart-1], htv[npart-1], htw[npart-1]);
 
   // free resources, after timer
