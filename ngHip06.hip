@@ -237,6 +237,12 @@ int main(int argc, char **argv) {
   hipHostMalloc((void**)&htu, npad*sizeof(FLOAT));
   hipHostMalloc((void**)&htv, npad*sizeof(FLOAT));
   hipHostMalloc((void**)&htw, npad*sizeof(FLOAT));
+  // check
+  auto memerr = hipGetLastError();
+  if (memerr != hipSuccess) {
+    fprintf(stderr, "Failed to malloc page-locked mem: %s!\n", hipGetErrorString(memerr));
+    exit(EXIT_FAILURE);
+  }
 
   // set initial values
   const FLOAT thisstrmag = 1.0 / std::sqrt(npart);
@@ -413,5 +419,17 @@ int main(int argc, char **argv) {
     }
   }
   printf( "  total host-device error ( %g ) max error ( %g )\n", std::sqrt(errsum/npart), errmax);
+
+  // free page-locked mem
+  hipHostFree(hsx);
+  hipHostFree(hsy);
+  hipHostFree(hsz);
+  hipHostFree(hss);
+  hipHostFree(hsr);
+  hipHostFree(htu);
+  hipHostFree(htv);
+  hipHostFree(htw);
+
+  exit(0);
 }
 
