@@ -1,5 +1,5 @@
 /*
- * nvortexHip.cpp
+ * nvHip02.cpp
  *
  * (c)2022 Mark J. Stock <markjstock@gmail.com>
  *
@@ -23,16 +23,16 @@
 // compute kernel - GPU
 __global__ void nvortex_2d_nograds_gpu(
     const int32_t nSrc,
-    const FLOAT* const sx,
-    const FLOAT* const sy,
-    const FLOAT* const ss,
-    const FLOAT* const sr,
+    const FLOAT* const __restrict__ sx,
+    const FLOAT* const __restrict__ sy,
+    const FLOAT* const __restrict__ ss,
+    const FLOAT* const __restrict__ sr,
     const int32_t tOffset,
-    const FLOAT* const tx,
-    const FLOAT* const ty,
-    const FLOAT* const tr,
-    FLOAT* const tu,
-    FLOAT* const tv) {
+    const FLOAT* const __restrict__ tx,
+    const FLOAT* const __restrict__ ty,
+    const FLOAT* const __restrict__ tr,
+    FLOAT* const __restrict__ tu,
+    FLOAT* const __restrict__ tv) {
 
   // local "thread" id - this is the target particle
   const int32_t i = tOffset + blockIdx.x*THREADS_PER_BLOCK + threadIdx.x;
@@ -70,7 +70,6 @@ __global__ void nvortex_2d_nograds_gpu(
   }
 
   // save into device view
-  // use atomics?!?
   tu[i] = locu / (2.0f*3.1415926536f);
   tv[i] = locv / (2.0f*3.1415926536f);
 
@@ -81,15 +80,15 @@ __global__ void nvortex_2d_nograds_gpu(
 // compute kernel - CPU
 __host__ void nvortex_2d_nograds_cpu(
     const int32_t nSrc,
-    const FLOAT* const sx,
-    const FLOAT* const sy,
-    const FLOAT* const ss,
-    const FLOAT* const sr,
+    const FLOAT* const __restrict__ sx,
+    const FLOAT* const __restrict__ sy,
+    const FLOAT* const __restrict__ ss,
+    const FLOAT* const __restrict__ sr,
     const FLOAT tx,
     const FLOAT ty,
     const FLOAT tr,
-    FLOAT* const tu,
-    FLOAT* const tv) {
+    FLOAT* const __restrict__ tu,
+    FLOAT* const __restrict__ tv) {
 
   // velocity accumulators for target point
   FLOAT locu = 0.0f;
@@ -149,35 +148,36 @@ int main(int argc, char **argv) {
   printf( "  ngpus ( %d )  and nstreams ( %d )\n", ngpus, nstreams);
 
   // set stream sizes
-  const int32_t nperstrm = buffer(npart/nstreams, THREADS_PER_BLOCK);
-  const int32_t npfull = nstreams*nperstrm;
-  printf( "  nperstrm ( %d )  and npfull ( %d )\n", nperstrm, npfull);
+  const int32_t ntargpad = buffer(npart, THREADS_PER_BLOCK*nstreams);
+  const int32_t ntargperstrm = ntargpad / nstreams;
+  printf( "  ntargperstrm ( %d )  and ntargpad ( %d )\n", ntargperstrm, ntargpad);
 
   // define the host arrays (for now, sources and targets are the same)
-  std::vector<FLOAT> hsx(npfull), hsy(npfull), hss(npfull), hsr(npfull), htu(npfull), htv(npfull);
+  const int32_t npad = ntargpad;
+  std::vector<FLOAT> hsx(npad), hsy(npad), hss(npad), hsr(npad), htu(npad), htv(npad);
   const FLOAT thisstrmag = 1.0 / std::sqrt(npart);
   const FLOAT thisrad    = (2./3.) / std::sqrt(npart);
   //std::random_device dev;
   //std::mt19937 rng(dev());
   std::mt19937 rng(1234);
   std::uniform_real_distribution<FLOAT> xrand(0.0,1.0);
-  for (int32_t i = 0; i < npart; ++i)      hsx[i] = xrand(rng);
-  for (int32_t i = npart; i < npfull; ++i) hsx[i] = 0.0;
-  for (int32_t i = 0; i < npart; ++i)      hsy[i] = xrand(rng);
-  for (int32_t i = npart; i < npfull; ++i) hsy[i] = 0.0;
-  for (int32_t i = 0; i < npart; ++i)      hss[i] = thisstrmag * (2.0*xrand(rng)-1.0);
-  for (int32_t i = npart; i < npfull; ++i) hss[i] = 0.0;
-  for (int32_t i = 0; i < npart; ++i)      hsr[i] = thisrad;
-  for (int32_t i = npart; i < npfull; ++i) hsr[i] = thisrad;
-  for (int32_t i = 0; i < npfull; ++i)     htu[i] = 0.0;
-  for (int32_t i = 0; i < npfull; ++i)     htv[i] = 0.0;
+  for (int32_t i = 0; i < npart; ++i)    hsx[i] = xrand(rng);
+  for (int32_t i = npart; i < npad; ++i) hsx[i] = 0.0;
+  for (int32_t i = 0; i < npart; ++i)    hsy[i] = xrand(rng);
+  for (int32_t i = npart; i < npad; ++i) hsy[i] = 0.0;
+  for (int32_t i = 0; i < npart; ++i)    hss[i] = thisstrmag * (2.0*xrand(rng)-1.0);
+  for (int32_t i = npart; i < npad; ++i) hss[i] = 0.0;
+  for (int32_t i = 0; i < npart; ++i)    hsr[i] = thisrad;
+  for (int32_t i = npart; i < npad; ++i) hsr[i] = thisrad;
+  for (int32_t i = 0; i < npad; ++i)     htu[i] = 0.0;
+  for (int32_t i = 0; i < npad; ++i)     htv[i] = 0.0;
 
   // -------------------------
   // do a CPU version
 
   auto start = std::chrono::system_clock::now();
 
-  #pragma omp parallel for
+  #pragma omp parallel for schedule(guided)
   for (int32_t i=0; i<npart; ++i) {
     nvortex_2d_nograds_cpu(npart, hsx.data(),hsy.data(),hss.data(),hsr.data(), hsx[i],hsy[i],hsr[i], &htu[i],&htv[i]);
   }
@@ -204,7 +204,7 @@ int main(int argc, char **argv) {
   start = std::chrono::system_clock::now();
 
   // move over all source particles first
-  const int32_t srcsize = npfull*sizeof(FLOAT);
+  const int32_t srcsize = npad*sizeof(FLOAT);
   const int32_t trgsize = npart*sizeof(FLOAT);
   hipMalloc (&dsx, srcsize);
   hipMalloc (&dsy, srcsize);
@@ -222,19 +222,20 @@ int main(int argc, char **argv) {
   dty = dsy;
   dtr = dsr;
 
-  for (int32_t nstrm=0; nstrm<nstreams; ++nstrm) {
+  // check
+  auto memerr = hipGetLastError();
+  if (memerr != hipSuccess) {
+    fprintf(stderr, "Failed to upload data (other): %s!\n", hipGetErrorString(memerr));
+    exit(EXIT_FAILURE);
+  }
 
-    // round-robin the GPUs used
-    //const int32_t thisgpu = nstrm % ngpus;
-    //cudaSetDevice(0);
+  const dim3 blocksz(THREADS_PER_BLOCK, 1, 1);
+  const dim3 gridsz(npad/THREADS_PER_BLOCK, 1, 1);
 
-    const dim3 blocks(npfull/THREADS_PER_BLOCK, 1, 1);
-    const dim3 threads(THREADS_PER_BLOCK, 1, 1);
-
-    // move the data
+  for (int32_t i=0; i<nstreams; ++i) {
 
     // launch the kernel
-    hipLaunchKernelGGL(nvortex_2d_nograds_gpu, dim3(blocks), dim3(threads), 0, 0, nperstrm, dsx,dsy,dss,dsr, 0,dtx,dty,dtr,dtu,dtv);
+    hipLaunchKernelGGL(nvortex_2d_nograds_gpu, dim3(gridsz), dim3(blocksz), 0, 0, nperstrm, dsx,dsy,dss,dsr, 0,dtx,dty,dtr,dtu,dtv);
 
     // check
     auto err = hipGetLastError();

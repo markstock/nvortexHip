@@ -60,7 +60,6 @@ __global__ void nvortex_2d_nograds_gpu(
   const int32_t jstart = blockIdx.y * jcount;
 
   for (int32_t b=0; b<jcount/THREADS_PER_BLOCK; ++b) {
-    __syncthreads();
 
     const int32_t gidx = jstart + b*THREADS_PER_BLOCK + threadIdx.x;
     s_sx[threadIdx.x] = sx[gidx];
@@ -82,12 +81,11 @@ __global__ void nvortex_2d_nograds_gpu(
       locu += dy * factor;
       locv -= dx * factor;
     }
+
+    __syncthreads();
   }
 
-  // save into device view
-  //tu[i] = locu / (2.0f*3.1415926536f);
-  //tv[i] = locv / (2.0f*3.1415926536f);
-  // use atomics
+  // save into device view with atomics
   atomicAdd(&tu[i], locu / (2.0f*3.1415926536f));
   atomicAdd(&tv[i], locv / (2.0f*3.1415926536f));
 
@@ -229,11 +227,6 @@ int main(int argc, char **argv) {
   // do a CPU version
 
   auto start = std::chrono::system_clock::now();
-
-  //#pragma omp parallel for schedule(guided)
-  //for (int32_t i=0; i<npart; ++i) {
-  //  nvortex_2d_nograds_cpu(npart, hsx.data(),hsy.data(),hss.data(),hsr.data(), hsx[i],hsy[i],hsr[i], &htu[i],&htv[i]);
-  //}
 
   #pragma omp parallel for schedule(guided)
   for (int32_t ibk=0; ibk<((npart+CPU_TRG_BLK-1)/CPU_TRG_BLK); ++ibk) {

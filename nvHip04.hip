@@ -71,7 +71,6 @@ __global__ void nvortex_2d_nograds_gpu(
   const int32_t jstart = blockIdx.y * jcount;
 
   for (int32_t b=0; b<jcount/THREADS_PER_BLOCK; ++b) {
-    __syncthreads();
 
     const int32_t gidx = jstart + b*THREADS_PER_BLOCK + threadIdx.x;
     s_sx[threadIdx.x] = sx[gidx];
@@ -90,6 +89,8 @@ __global__ void nvortex_2d_nograds_gpu(
       KahanSum_gpu( dy * factor, &locu);
       KahanSum_gpu(-dx * factor, &locv);
     }
+
+    __syncthreads();
   }
 
   // save into device view with atomics
@@ -142,7 +143,6 @@ __host__ void nvortex_2d_nograds_cpu(
     FLOAT dy = sy[j] - ty;
     FLOAT distsq = dx*dx + dy*dy + sr[j]*sr[j] + tr2;
     FLOAT factor = ss[j] / distsq;
-    // I just can't get this to simd-ize!!!
     //{
       FLOAT y = dy * factor - ukah;
       FLOAT t = locu + y;
@@ -155,10 +155,9 @@ __host__ void nvortex_2d_nograds_cpu(
       vkah = (t - locv) - y;
       locv = t;
     //}
+    // I just can't get this to simd-ize!!!
     //KahanSum_cpu( dy * factor, &locu, &ukah);
     //KahanSum_cpu(-dx * factor, &locv, &vkah);
-    //locu += dy * factor;
-    //locv -= dx * factor;
   }
 
   // save into device view
@@ -244,7 +243,7 @@ int main(int argc, char **argv) {
 
   auto start = std::chrono::system_clock::now();
 
-  #pragma omp parallel for
+  #pragma omp parallel for schedule(guided)
   for (int32_t i=0; i<npart; ++i) {
     nvortex_2d_nograds_cpu(npart, hsx.data(),hsy.data(),hss.data(),hsr.data(), hsx[i],hsy[i],hsr[i], &htu[i],&htv[i]);
   }
@@ -253,7 +252,7 @@ int main(int argc, char **argv) {
   std::chrono::duration<double> elapsed_seconds = end-start;
   double time = elapsed_seconds.count();
 
-  printf( "  host total time( %g s ) and flops( %g GFlop/s )\n", time, 1.e-9 * (double)npart*(5+19*(double)npart)/time);
+  printf( "  host total time( %g s ) and flops( %g GFlop/s )\n", time, 1.e-9 * (double)npart*(7+19*(double)npart)/time);
   printf( "    results ( %g %g %g %g %g %g)\n", htu[0], htv[0], htu[1], htv[1], htu[npart-1], htv[npart-1]);
 
   // copy the results into temp vectors
@@ -284,6 +283,9 @@ int main(int argc, char **argv) {
     hipMalloc (&dtv[i], trgsize);
   }
 
+  const dim3 blocksz(THREADS_PER_BLOCK, 1, 1);
+  const dim3 gridsz(ntargperstrm/THREADS_PER_BLOCK, nsrcblocks, 1);
+
   // to be fair, we start timer after allocation but before transfer
   start = std::chrono::system_clock::now();
 
@@ -312,9 +314,6 @@ int main(int argc, char **argv) {
       exit(EXIT_FAILURE);
     }
   }
-
-  const dim3 blocksz(THREADS_PER_BLOCK, 1, 1);
-  const dim3 gridsz(ntargperstrm/THREADS_PER_BLOCK, nsrcblocks, 1);
 
   for (int32_t i=0; i<nstreams; ++i) {
     // launch the kernel
@@ -345,7 +344,7 @@ int main(int argc, char **argv) {
   end = std::chrono::system_clock::now();
   elapsed_seconds = end-start;
   time = elapsed_seconds.count();
-  printf( "  device total time( %g s ) and flops( %g GFlop/s )\n", time, 1.e-9 * (double)npart*(5+19*(double)npart)/time);
+  printf( "  device total time( %g s ) and flops( %g GFlop/s )\n", time, 1.e-9 * (double)npart*(9+19*(double)npart)/time);
   printf( "    results ( %g %g %g %g %g %g)\n", htu[0], htv[0], htu[1], htv[1], htu[npart-1], htv[npart-1]);
 
   // free resources, after timer
