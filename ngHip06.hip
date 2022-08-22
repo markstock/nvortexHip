@@ -18,6 +18,8 @@
 // compute using float or double
 #define FLOAT float
 #define RSQRT rsqrtf
+//#define FLOAT double
+//#define RSQRT rsqrt
 
 #define CPU_SRC_BLK 256
 #define CPU_TRG_BLK 32
@@ -27,6 +29,17 @@
 
 // GPU count limit
 #define MAX_GPUS 8
+
+// useful macros
+#define gpuCheckCall(call)	\
+do {							\
+  hipError_t err = call;		\
+  if (err != hipSuccess) {		\
+    fprintf(stderr, "GPU error %s:%d: '%s'!\n", __FILE__, __LINE__, hipGetErrorString(err));	\
+    exit(EXIT_FAILURE);			\
+  }								\
+} while(0)
+
 
 // -------------------------
 // compute kernel - GPU
@@ -61,7 +74,7 @@ __global__ void ngrav_3d_nograds_gpu(
   FLOAT locv = 0.0f;
   FLOAT locw = 0.0f;
 
-  FLOAT tr2 = tr[i]*tr[i];
+  const FLOAT tr2 = tr[i]*tr[i];
 
   // which sources do we iterate over?
   const int32_t jcount = nSrc / gridDim.y;
@@ -85,8 +98,15 @@ __global__ void ngrav_3d_nograds_gpu(
       FLOAT dx = s_sx[j] - tx[i];
       FLOAT dy = s_sy[j] - ty[i];
       FLOAT dz = s_sz[j] - tz[i];
+      // method A - fastest for both float and double
       FLOAT distsq = dx*dx + dy*dy + dz*dz + s_sr[j]*s_sr[j] + tr2;
       FLOAT factor = s_ss[j] * RSQRT(distsq) / distsq;
+      // method B - more flops, slower
+      //FLOAT distsq = dx*dx + dy*dy + dz*dz + s_sr[j]*s_sr[j] + tr2;
+      //FLOAT factor = s_ss[j] / (sqrt(distsq) * distsq);
+      // method C - exactly the same as B
+      //FLOAT distsq = 1.0 / (dx*dx + dy*dy + dz*dz + s_sr[j]*s_sr[j] + tr2);
+      //FLOAT factor = s_ss[j] * sqrt(distsq) * distsq;
       locu += dx * factor;
       locv += dy * factor;
       locw += dz * factor;
@@ -308,11 +328,13 @@ int main(int argc, char **argv) {
   // allocate space for all sources, part of targets
   const int32_t srcsize = nsrcpad*sizeof(FLOAT);
   const int32_t trgsize = ntargperstrm*sizeof(FLOAT);
+  const std::vector<int32_t> gpubind = {4,5,2,3,6,7,0,1};
   //for (int32_t i=0; i<nstreams; ++i) {
   #pragma omp parallel num_threads(nstreams)
   {
     const int32_t i = omp_get_thread_num();
     hipSetDevice(i);
+    //hipSetDevice(gpubind[i]);
     hipStreamCreate(&stream[i]);
 
     hipMalloc (&dsx[i], srcsize);
@@ -339,14 +361,14 @@ int main(int argc, char **argv) {
     //hipSetDevice(i);
 
     // set some and move other data
-    hipMemsetAsync (dtu[i], 0, trgsize, stream[i]);
-    hipMemsetAsync (dtv[i], 0, trgsize, stream[i]);
-    hipMemsetAsync (dtw[i], 0, trgsize, stream[i]);
-    hipMemcpyAsync (dsx[i], hsx, srcsize, hipMemcpyHostToDevice, stream[i]);
-    hipMemcpyAsync (dsy[i], hsy, srcsize, hipMemcpyHostToDevice, stream[i]);
-    hipMemcpyAsync (dsz[i], hsz, srcsize, hipMemcpyHostToDevice, stream[i]);
-    hipMemcpyAsync (dss[i], hss, srcsize, hipMemcpyHostToDevice, stream[i]);
-    hipMemcpyAsync (dsr[i], hsr, srcsize, hipMemcpyHostToDevice, stream[i]);
+    gpuCheckCall( hipMemsetAsync (dtu[i], 0, trgsize, stream[i]) );
+    gpuCheckCall( hipMemsetAsync (dtv[i], 0, trgsize, stream[i]) );
+    gpuCheckCall( hipMemsetAsync (dtw[i], 0, trgsize, stream[i]) );
+    gpuCheckCall( hipMemcpyAsync (dsx[i], hsx, srcsize, hipMemcpyHostToDevice, stream[i]) );
+    gpuCheckCall( hipMemcpyAsync (dsy[i], hsy, srcsize, hipMemcpyHostToDevice, stream[i]) );
+    gpuCheckCall( hipMemcpyAsync (dsz[i], hsz, srcsize, hipMemcpyHostToDevice, stream[i]) );
+    gpuCheckCall( hipMemcpyAsync (dss[i], hss, srcsize, hipMemcpyHostToDevice, stream[i]) );
+    gpuCheckCall( hipMemcpyAsync (dsr[i], hsr, srcsize, hipMemcpyHostToDevice, stream[i]) );
     // now we need to be careful to point to the part of the source arrays that hold
     //   just this GPUs set of target particles
     dtx[i] = dsx[i] + i*ntargperstrm;
@@ -374,12 +396,8 @@ int main(int argc, char **argv) {
                        nsrcpad, dsx[i],dsy[i],dsz[i],dss[i],dsr[i],
                        0,dtx[i],dty[i],dtz[i],dtr[i],dtu[i],dtv[i],dtw[i]);
 
-    // check
-    //auto err = hipGetLastError();
-    //if (err != hipSuccess) {
-    //  fprintf(stderr, "Failed to launch kernel (%d): %s!\n", i, hipGetErrorString(err));
-    //  exit(EXIT_FAILURE);
-    //}
+    // check for synchronous errors
+    if (false) gpuCheckCall(hipGetLastError());
   }
 
   // moving these calls inside of the kernel loop slows things down a lot
@@ -388,15 +406,19 @@ int main(int argc, char **argv) {
   {
     const int32_t i = omp_get_thread_num();
     // pull data back down
-    hipMemcpyAsync (htu + i*ntargperstrm, dtu[i], trgsize, hipMemcpyDeviceToHost, stream[i]);
-    hipMemcpyAsync (htv + i*ntargperstrm, dtv[i], trgsize, hipMemcpyDeviceToHost, stream[i]);
-    hipMemcpyAsync (htw + i*ntargperstrm, dtw[i], trgsize, hipMemcpyDeviceToHost, stream[i]);
+    gpuCheckCall( hipMemcpyAsync (htu + i*ntargperstrm, dtu[i], trgsize, hipMemcpyDeviceToHost, stream[i]) );
+    gpuCheckCall( hipMemcpyAsync (htv + i*ntargperstrm, dtv[i], trgsize, hipMemcpyDeviceToHost, stream[i]) );
+    gpuCheckCall( hipMemcpyAsync (htw + i*ntargperstrm, dtw[i], trgsize, hipMemcpyDeviceToHost, stream[i]) );
   }
 
   // join streams
   for (int32_t i=0; i<nstreams; ++i) {
-    hipStreamSynchronize(stream[i]);
+    gpuCheckCall( hipStreamSynchronize(stream[i]) );
   }
+
+  // check for asynchronous errors
+  // which device?
+  if (false) gpuCheckCall( hipDeviceSynchronize() );
 
   // time and report
   end = std::chrono::system_clock::now();
