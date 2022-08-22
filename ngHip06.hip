@@ -81,7 +81,6 @@ __global__ void ngrav_3d_nograds_gpu(
   const int32_t jstart = blockIdx.y * jcount;
 
   for (int32_t b=0; b<jcount/THREADS_PER_BLOCK; ++b) {
-    __syncthreads();
 
     const int32_t gidx = jstart + b*THREADS_PER_BLOCK + threadIdx.x;
     s_sx[threadIdx.x] = sx[gidx];
@@ -111,9 +110,11 @@ __global__ void ngrav_3d_nograds_gpu(
       locv += dy * factor;
       locw += dz * factor;
     }
+
+    __syncthreads();
   }
 
-  // save into device view using atomics
+  // save into device view with atomics
   atomicAdd(&tu[i], locu / (4.0f*3.1415926536f));
   atomicAdd(&tv[i], locv / (4.0f*3.1415926536f));
   atomicAdd(&tw[i], locw / (4.0f*3.1415926536f));
