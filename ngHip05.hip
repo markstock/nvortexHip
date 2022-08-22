@@ -16,6 +16,8 @@
 // compute using float or double
 #define FLOAT float
 #define RSQRT rsqrtf
+//#define FLOAT double
+//#define RSQRT rsqrt
 
 #define CPU_SRC_BLK 256
 #define CPU_TRG_BLK 32
@@ -25,6 +27,17 @@
 
 // GPU count limit
 #define MAX_GPUS 8
+
+// useful macros
+#define gpuCheckCall(call)	\
+do {							\
+  hipError_t err = call;		\
+  if (err != hipSuccess) {		\
+    fprintf(stderr, "GPU error %s:%d: '%s'!\n", __FILE__, __LINE__, hipGetErrorString(err));	\
+    exit(EXIT_FAILURE);			\
+  }								\
+} while(0)
+
 
 // -------------------------
 // compute kernel - GPU
@@ -59,14 +72,13 @@ __global__ void ngrav_3d_nograds_gpu(
   FLOAT locv = 0.0f;
   FLOAT locw = 0.0f;
 
-  FLOAT tr2 = tr[i]*tr[i];
+  const FLOAT tr2 = tr[i]*tr[i];
 
   // which sources do we iterate over?
   const int32_t jcount = nSrc / gridDim.y;
   const int32_t jstart = blockIdx.y * jcount;
 
   for (int32_t b=0; b<jcount/THREADS_PER_BLOCK; ++b) {
-    __syncthreads();
 
     const int32_t gidx = jstart + b*THREADS_PER_BLOCK + threadIdx.x;
     s_sx[threadIdx.x] = sx[gidx];
@@ -89,9 +101,11 @@ __global__ void ngrav_3d_nograds_gpu(
       locv += dy * factor;
       locw += dz * factor;
     }
+
+    __syncthreads();
   }
 
-  // save into device view using atomics
+  // save into device view with atomics
   atomicAdd(&tu[i], locu / (4.0f*3.1415926536f));
   atomicAdd(&tv[i], locv / (4.0f*3.1415926536f));
   atomicAdd(&tw[i], locw / (4.0f*3.1415926536f));
@@ -179,20 +193,25 @@ __host__ int32_t buffer(const int32_t _n, const int32_t _align) {
 // main program
 
 static void usage() {
-  fprintf(stderr, "Usage: ngHip05.bin [-n=<number>]\n");
+  fprintf(stderr, "Usage: ngHip05.bin [-n=<num parts>] [-g=<num gpus>]\n");
   exit(1);
 }
 
 int main(int argc, char **argv) {
 
-  // number of particles/points
+  // number of particles/points and gpus
   int32_t npart = 400000;
+  int32_t force_ngpus = -1;
 
-  if (argc > 1) {
-    if (strncmp(argv[1], "-n=", 3) == 0) {
-      int num = atoi(argv[1] + 3);
+  for (int i=1; i<argc; i++) {
+    if (strncmp(argv[i], "-n=", 3) == 0) {
+      int32_t num = atoi(argv[i]+3);
       if (num < 1) usage();
       npart = num;
+    } else if (strncmp(argv[i], "-g=", 3) == 0) {
+      int32_t num = atof(argv[i]+3);
+      if (num < 1 or num > MAX_GPUS) usage();
+      force_ngpus = num;
     }
   }
 
@@ -201,14 +220,14 @@ int main(int argc, char **argv) {
   // number of GPUs present
   int32_t ngpus = 1;
   hipGetDeviceCount(&ngpus);
-  //ngpus = 1;	// Force 1 GPU
-  // number of cuda streams to break work into
+  if (force_ngpus > 0) ngpus = force_ngpus;
+  // number of streams to break work into
   int32_t nstreams = std::min(MAX_GPUS, ngpus);
   printf( "  ngpus ( %d )  and nstreams ( %d )\n", ngpus, nstreams);
 
   // we parallelize targets over GPUs/streams
-  const int32_t ntargperstrm = buffer(npart/nstreams, THREADS_PER_BLOCK*nstreams);
-  const int32_t ntargpad = ntargperstrm * nstreams;
+  const int32_t ntargpad = buffer(npart, THREADS_PER_BLOCK*nstreams);
+  const int32_t ntargperstrm = ntargpad / nstreams;
   printf( "  ntargperstrm ( %d )  and ntargpad ( %d )\n", ntargperstrm, ntargpad);
 
   // and on each GPU, we parallelize over THREADS_PER_BLOCK targets and nsrcblocks source blocks
@@ -331,18 +350,16 @@ int main(int argc, char **argv) {
   //}
 
   //for (int32_t i=0; i<nstreams; ++i) {
-    // launch the kernel
+    // get this device and stream
     //hipSetDevice(i);
+
+    // launch the kernels
     hipLaunchKernelGGL(ngrav_3d_nograds_gpu, dim3(gridsz), dim3(blocksz), 0, stream[i],
                        nsrcpad, dsx[i],dsy[i],dsz[i],dss[i],dsr[i],
                        0,dtx[i],dty[i],dtz[i],dtr[i],dtu[i],dtv[i],dtw[i]);
 
-    // check
-    //auto err = hipGetLastError();
-    //if (err != hipSuccess) {
-    //  fprintf(stderr, "Failed to launch kernel (%d): %s!\n", i, hipGetErrorString(err));
-    //  exit(EXIT_FAILURE);
-    //}
+    // check for synchronous errors
+    if (false) gpuCheckCall(hipGetLastError());
   }
 
   // moving these calls inside of the kernel loop slows things down a lot
@@ -355,8 +372,12 @@ int main(int argc, char **argv) {
 
   // join streams
   for (int32_t i=0; i<nstreams; ++i) {
-    hipStreamSynchronize(stream[i]);
+    gpuCheckCall( hipStreamSynchronize(stream[i]) );
   }
+
+  // check for asynchronous errors
+  // which device?
+  if (false) gpuCheckCall( hipDeviceSynchronize() );
 
   // time and report
   end = std::chrono::system_clock::now();
