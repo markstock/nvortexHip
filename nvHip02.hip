@@ -235,7 +235,7 @@ int main(int argc, char **argv) {
   for (int32_t i=0; i<nstreams; ++i) {
 
     // launch the kernel
-    hipLaunchKernelGGL(nvortex_2d_nograds_gpu, dim3(gridsz), dim3(blocksz), 0, 0, nperstrm, dsx,dsy,dss,dsr, 0,dtx,dty,dtr,dtu,dtv);
+    hipLaunchKernelGGL(nvortex_2d_nograds_gpu, dim3(gridsz), dim3(blocksz), 0, 0, npad, dsx,dsy,dss,dsr, 0,dtx,dty,dtr,dtu,dtv);
 
     // check
     auto err = hipGetLastError();
