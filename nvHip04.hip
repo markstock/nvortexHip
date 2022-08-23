@@ -171,7 +171,7 @@ __host__ void nvortex_2d_nograds_cpu(
 // not really alignment, just minimum block sizes
 __host__ int32_t buffer(const int32_t _n, const int32_t _align) {
   // 63,64 returns 1; 64,64 returns 1; 65,64 returns 2
-  return _align*(1+(_n-1)/_align);
+  return _align*((_n+_align-1)/_align);
 }
 
 // main program
