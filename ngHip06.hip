@@ -1,16 +1,14 @@
 /*
- * ngHip07.hip
+ * ngHip06.hip
  *
  * (c)2022 Mark J. Stock <markjstock@gmail.com>
  *
- * v0.7  use page-locked (pinned) memory and one thread per gpu/stream
+ * v0.6  using launch_bounds, other stuff
  */
 
 #include <vector>
 #include <random>
 #include <chrono>
-
-#include <omp.h>
 
 #include <hip/hip_runtime.h>
 
@@ -43,7 +41,7 @@ do {							\
 
 // -------------------------
 // compute kernel - GPU
-__global__ void ngrav_3d_nograds_gpu(
+__global__ void __launch_bounds__(THREADS_PER_BLOCK) ngrav_3d_nograds_gpu(
     const int32_t nSrc,
     const FLOAT* const __restrict__ sx,
     const FLOAT* const __restrict__ sy,
@@ -97,15 +95,8 @@ __global__ void ngrav_3d_nograds_gpu(
       FLOAT dx = s_sx[j] - tx[i];
       FLOAT dy = s_sy[j] - ty[i];
       FLOAT dz = s_sz[j] - tz[i];
-      // method A - fastest for both float and double
       FLOAT distsq = dx*dx + dy*dy + dz*dz + s_sr[j]*s_sr[j] + tr2;
       FLOAT factor = s_ss[j] * RSQRT(distsq) / distsq;
-      // method B - more flops, slower
-      //FLOAT distsq = dx*dx + dy*dy + dz*dz + s_sr[j]*s_sr[j] + tr2;
-      //FLOAT factor = s_ss[j] / (sqrt(distsq) * distsq);
-      // method C - exactly the same as B
-      //FLOAT distsq = 1.0 / (dx*dx + dy*dy + dz*dz + s_sr[j]*s_sr[j] + tr2);
-      //FLOAT factor = s_ss[j] * sqrt(distsq) * distsq;
       locu += dx * factor;
       locv += dy * factor;
       locw += dz * factor;
@@ -196,13 +187,13 @@ __host__ void ngrav_3d_nograds_cpu(
 // not really alignment, just minimum block sizes
 __host__ int32_t buffer(const int32_t _n, const int32_t _align) {
   // 63,64 returns 1; 64,64 returns 1; 65,64 returns 2
-  return _align*(1+(_n-1)/_align);
+  return _align*((_n+_align-1)/_align);
 }
 
 // main program
 
 static void usage() {
-  fprintf(stderr, "Usage: ngHip07.bin [-n=<num parts>] [-g=<num gpus>]\n");
+  fprintf(stderr, "Usage: ngHip06.bin [-n=<num parts>] [-g=<num gpus>] [-c]\n");
   exit(1);
 }
 
@@ -211,6 +202,7 @@ int main(int argc, char **argv) {
   // number of particles/points and gpus
   int32_t npart = 400000;
   int32_t force_ngpus = -1;
+  bool compare = false;
 
   for (int i=1; i<argc; i++) {
     if (strncmp(argv[i], "-n=", 3) == 0) {
@@ -221,6 +213,8 @@ int main(int argc, char **argv) {
       int32_t num = atof(argv[i]+3);
       if (num < 1 or num > MAX_GPUS) usage();
       force_ngpus = num;
+    } else if (strncmp(argv[i], "-c", 2) == 0) {
+      compare = true;
     }
   }
 
@@ -235,8 +229,8 @@ int main(int argc, char **argv) {
   printf( "  ngpus ( %d )  and nstreams ( %d )\n", ngpus, nstreams);
 
   // we parallelize targets over GPUs/streams
-  const int32_t ntargperstrm = buffer(npart/nstreams, THREADS_PER_BLOCK*nstreams);
-  const int32_t ntargpad = ntargperstrm * nstreams;
+  const int32_t ntargpad = buffer(npart, THREADS_PER_BLOCK*nstreams);
+  const int32_t ntargperstrm = ntargpad / nstreams;
   printf( "  ntargperstrm ( %d )  and ntargpad ( %d )\n", ntargperstrm, ntargpad);
 
   // and on each GPU, we parallelize over THREADS_PER_BLOCK targets and nsrcblocks source blocks
@@ -250,24 +244,7 @@ int main(int argc, char **argv) {
 
   // define the host arrays (for now, sources and targets are the same)
   const int32_t npad = std::max(ntargpad,nsrcpad);
-  // allocate page-locked memory for faster transfers
-  FLOAT *hsx, *hsy, *hsz, *hss, *hsr, *htu, *htv, *htw;
-  hipHostMalloc((void**)&hsx, npad*sizeof(FLOAT));
-  hipHostMalloc((void**)&hsy, npad*sizeof(FLOAT));
-  hipHostMalloc((void**)&hsz, npad*sizeof(FLOAT));
-  hipHostMalloc((void**)&hss, npad*sizeof(FLOAT));
-  hipHostMalloc((void**)&hsr, npad*sizeof(FLOAT));
-  hipHostMalloc((void**)&htu, npad*sizeof(FLOAT));
-  hipHostMalloc((void**)&htv, npad*sizeof(FLOAT));
-  hipHostMalloc((void**)&htw, npad*sizeof(FLOAT));
-  // check
-  auto memerr = hipGetLastError();
-  if (memerr != hipSuccess) {
-    fprintf(stderr, "Failed to malloc page-locked mem: %s!\n", hipGetErrorString(memerr));
-    exit(EXIT_FAILURE);
-  }
-
-  // set initial values
+  std::vector<FLOAT> hsx(npad), hsy(npad), hsz(npad), hss(npad), hsr(npad), htu(npad), htv(npad), htw(npad);
   const FLOAT thisstrmag = 1.0 / std::sqrt(npart);
   const FLOAT thisrad    = (2./3.) / std::sqrt(npart);
   //std::random_device dev;
@@ -284,23 +261,21 @@ int main(int argc, char **argv) {
   for (int32_t i = npart; i < npad; ++i) hss[i] = 0.0;
   for (int32_t i = 0; i < npart; ++i)    hsr[i] = thisrad;
   for (int32_t i = npart; i < npad; ++i) hsr[i] = thisrad;
+  for (int32_t i = 0; i < npad; ++i)     htu[i] = 0.0;
+  for (int32_t i = 0; i < npad; ++i)     htv[i] = 0.0;
+  for (int32_t i = 0; i < npad; ++i)     htw[i] = 0.0;
 
   // -------------------------
   // do a CPU version
 
+  if (compare) {
   auto start = std::chrono::system_clock::now();
 
-  // zero accumulation buffers
-  for (int32_t i = 0; i < npad; ++i) htu[i] = 0.0;
-  for (int32_t i = 0; i < npad; ++i) htv[i] = 0.0;
-  for (int32_t i = 0; i < npad; ++i) htw[i] = 0.0;
-
-  // acceleration-finding kernel
   #pragma omp parallel for schedule(guided)
   for (int32_t ibk=0; ibk<((npart+CPU_TRG_BLK-1)/CPU_TRG_BLK); ++ibk) {
     const int32_t istart = CPU_TRG_BLK*ibk;
     const int32_t iend = std::min(npart, CPU_TRG_BLK*(ibk+1));
-    ngrav_3d_nograds_cpu(npart, hsx,hsy,hsz,hss,hsr,
+    ngrav_3d_nograds_cpu(npart, hsx.data(),hsy.data(),hsz.data(),hss.data(),hsr.data(),
                          iend-istart, &hsx[istart],&hsy[istart],&hsz[istart],&hsr[istart],
                          &htu[istart],&htv[istart],&htw[istart]);
   }
@@ -311,11 +286,12 @@ int main(int argc, char **argv) {
 
   printf( "  host total time( %g s ) and flops( %g GFlop/s )\n", time, 1.e-9 * (double)npart*(7+20*(double)npart)/time);
   printf( "    results ( %g %g %g %g %g %g)\n", htu[0], htv[0], htw[0], htu[npart-1], htv[npart-1], htw[npart-1]);
+  }
 
   // copy the results into temp vectors
-  std::vector<FLOAT> htu_cpu(&htu[0], &htu[npart]);
-  std::vector<FLOAT> htv_cpu(&htv[0], &htv[npart]);
-  std::vector<FLOAT> htw_cpu(&htw[0], &htw[npart]);
+  std::vector<FLOAT> htu_cpu(htu);
+  std::vector<FLOAT> htv_cpu(htv);
+  std::vector<FLOAT> htw_cpu(htw);
 
   // -------------------------
   // do the GPU version
@@ -329,13 +305,8 @@ int main(int argc, char **argv) {
   // allocate space for all sources, part of targets
   const int32_t srcsize = nsrcpad*sizeof(FLOAT);
   const int32_t trgsize = ntargperstrm*sizeof(FLOAT);
-  const std::vector<int32_t> gpubind = {4,5,2,3,6,7,0,1};
-  //for (int32_t i=0; i<nstreams; ++i) {
-  #pragma omp parallel num_threads(nstreams)
-  {
-    const int32_t i = omp_get_thread_num();
+  for (int32_t i=0; i<nstreams; ++i) {
     hipSetDevice(i);
-    //hipSetDevice(gpubind[i]);
     hipStreamCreate(&stream[i]);
 
     hipMalloc (&dsx[i], srcsize);
@@ -352,24 +323,22 @@ int main(int argc, char **argv) {
   const dim3 gridsz(ntargperstrm/THREADS_PER_BLOCK, nsrcblocks, 1);
 
   // to be fair, we start timer after allocation but before transfer
-  start = std::chrono::system_clock::now();
+  auto start = std::chrono::system_clock::now();
 
   // now perform the data movement and setting
-  //for (int32_t i=0; i<nstreams; ++i) {
-  #pragma omp parallel num_threads(nstreams)
-  {
-    const int32_t i = omp_get_thread_num();
-    //hipSetDevice(i);
+  for (int32_t i=0; i<nstreams; ++i) {
+
+    hipSetDevice(i);
 
     // set some and move other data
-    gpuCheckCall( hipMemsetAsync (dtu[i], 0, trgsize, stream[i]) );
-    gpuCheckCall( hipMemsetAsync (dtv[i], 0, trgsize, stream[i]) );
-    gpuCheckCall( hipMemsetAsync (dtw[i], 0, trgsize, stream[i]) );
-    gpuCheckCall( hipMemcpyAsync (dsx[i], hsx, srcsize, hipMemcpyHostToDevice, stream[i]) );
-    gpuCheckCall( hipMemcpyAsync (dsy[i], hsy, srcsize, hipMemcpyHostToDevice, stream[i]) );
-    gpuCheckCall( hipMemcpyAsync (dsz[i], hsz, srcsize, hipMemcpyHostToDevice, stream[i]) );
-    gpuCheckCall( hipMemcpyAsync (dss[i], hss, srcsize, hipMemcpyHostToDevice, stream[i]) );
-    gpuCheckCall( hipMemcpyAsync (dsr[i], hsr, srcsize, hipMemcpyHostToDevice, stream[i]) );
+    hipMemsetAsync (dtu[i], 0, trgsize, stream[i]);
+    hipMemsetAsync (dtv[i], 0, trgsize, stream[i]);
+    hipMemsetAsync (dtw[i], 0, trgsize, stream[i]);
+    hipMemcpyAsync (dsx[i], hsx.data(), srcsize, hipMemcpyHostToDevice, stream[i]);
+    hipMemcpyAsync (dsy[i], hsy.data(), srcsize, hipMemcpyHostToDevice, stream[i]);
+    hipMemcpyAsync (dsz[i], hsz.data(), srcsize, hipMemcpyHostToDevice, stream[i]);
+    hipMemcpyAsync (dss[i], hss.data(), srcsize, hipMemcpyHostToDevice, stream[i]);
+    hipMemcpyAsync (dsr[i], hsr.data(), srcsize, hipMemcpyHostToDevice, stream[i]);
     // now we need to be careful to point to the part of the source arrays that hold
     //   just this GPUs set of target particles
     dtx[i] = dsx[i] + i*ntargperstrm;
@@ -386,9 +355,6 @@ int main(int argc, char **argv) {
   //}
 
   //for (int32_t i=0; i<nstreams; ++i) {
-  //#pragma omp parallel num_threads(nstreams)
-  //{
-    //const int32_t i = omp_get_thread_num();
     // get this device and stream
     //hipSetDevice(i);
 
@@ -402,14 +368,11 @@ int main(int argc, char **argv) {
   }
 
   // moving these calls inside of the kernel loop slows things down a lot
-  //for (int32_t i=0; i<nstreams; ++i) {
-  #pragma omp parallel num_threads(nstreams)
-  {
-    const int32_t i = omp_get_thread_num();
+  for (int32_t i=0; i<nstreams; ++i) {
     // pull data back down
-    gpuCheckCall( hipMemcpyAsync (htu + i*ntargperstrm, dtu[i], trgsize, hipMemcpyDeviceToHost, stream[i]) );
-    gpuCheckCall( hipMemcpyAsync (htv + i*ntargperstrm, dtv[i], trgsize, hipMemcpyDeviceToHost, stream[i]) );
-    gpuCheckCall( hipMemcpyAsync (htw + i*ntargperstrm, dtw[i], trgsize, hipMemcpyDeviceToHost, stream[i]) );
+    hipMemcpyAsync (htu.data() + i*ntargperstrm, dtu[i], trgsize, hipMemcpyDeviceToHost, stream[i]);
+    hipMemcpyAsync (htv.data() + i*ntargperstrm, dtv[i], trgsize, hipMemcpyDeviceToHost, stream[i]);
+    hipMemcpyAsync (htw.data() + i*ntargperstrm, dtw[i], trgsize, hipMemcpyDeviceToHost, stream[i]);
   }
 
   // join streams
@@ -422,17 +385,14 @@ int main(int argc, char **argv) {
   if (false) gpuCheckCall( hipDeviceSynchronize() );
 
   // time and report
-  end = std::chrono::system_clock::now();
-  elapsed_seconds = end-start;
-  time = elapsed_seconds.count();
+  auto end = std::chrono::system_clock::now();
+  std::chrono::duration<double> elapsed_seconds = end-start;
+  double time = elapsed_seconds.count();
   printf( "  device total time( %g s ) and flops( %g GFlop/s )\n", time, 1.e-9 * (double)npart*(7+20*(double)npart)/time);
   printf( "    results ( %g %g %g %g %g %g)\n", htu[0], htv[0], htw[0], htu[npart-1], htv[npart-1], htw[npart-1]);
 
   // free resources, after timer
-  //for (int32_t i=0; i<nstreams; ++i) {
-  #pragma omp parallel num_threads(nstreams)
-  {
-    const int32_t i = omp_get_thread_num();
+  for (int32_t i=0; i<nstreams; ++i) {
     hipFree(dsx[i]);
     hipFree(dsy[i]);
     hipFree(dsz[i]);
@@ -445,6 +405,7 @@ int main(int argc, char **argv) {
   }
 
   // compare results
+  if (compare) {
   FLOAT errsum = 0.0;
   FLOAT errmax = 0.0;
   for (int32_t i=0; i<npart; ++i) {
@@ -458,17 +419,6 @@ int main(int argc, char **argv) {
     }
   }
   printf( "  total host-device error ( %g ) max error ( %g )\n", std::sqrt(errsum/npart), errmax);
-
-  // free page-locked mem
-  hipHostFree(hsx);
-  hipHostFree(hsy);
-  hipHostFree(hsz);
-  hipHostFree(hss);
-  hipHostFree(hsr);
-  hipHostFree(htu);
-  hipHostFree(htv);
-  hipHostFree(htw);
-
-  exit(0);
+  }
 }
 
