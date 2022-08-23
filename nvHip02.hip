@@ -19,6 +19,16 @@
 // threads per block (hard coded)
 #define THREADS_PER_BLOCK 128
 
+// useful macros
+#define gpuCheckCall(call)	\
+do {							\
+  hipError_t err = call;		\
+  if (err != hipSuccess) {		\
+    fprintf(stderr, "GPU error %s:%d: '%s'!\n", __FILE__, __LINE__, hipGetErrorString(err));	\
+    exit(EXIT_FAILURE);			\
+  }								\
+} while(0)
+
 // -------------------------
 // compute kernel - GPU
 __global__ void nvortex_2d_nograds_gpu(
@@ -122,7 +132,7 @@ __host__ int32_t buffer(const int32_t _n, const int32_t _align) {
 // main program
 
 static void usage() {
-  fprintf(stderr, "Usage: nvHip02.bin [-n=<number>]\n");
+  fprintf(stderr, "Usage: nvHip02.bin [-n=<number>] [-c]\n");
   exit(1);
 }
 
@@ -130,12 +140,15 @@ int main(int argc, char **argv) {
 
   // number of particles/points
   int32_t npart = 200000;
+  bool compare = false;
 
-  if (argc > 1) {
-    if (strncmp(argv[1], "-n=", 3) == 0) {
-      int num = atoi(argv[1] + 3);
+  for (int i=1; i<argc; i++) {
+    if (strncmp(argv[i], "-n=", 3) == 0) {
+      int32_t num = atoi(argv[i]+3);
       if (num < 1) usage();
       npart = num;
+    } else if (strncmp(argv[i], "-c", 2) == 0) {
+      compare = true;
     }
   }
 
@@ -175,6 +188,7 @@ int main(int argc, char **argv) {
   // -------------------------
   // do a CPU version
 
+  if (compare) {
   auto start = std::chrono::system_clock::now();
 
   #pragma omp parallel for schedule(guided)
@@ -187,7 +201,8 @@ int main(int argc, char **argv) {
   double time = elapsed_seconds.count();
 
   printf( "  host total time( %g s ) and flops( %g GFlop/s )\n", time, 1.e-9 * (double)npart*(4+14*(double)npart)/time);
-  printf( "    results ( %g %g %g %g %g %g)\n", htu[0], htv[0], htu[1], htv[1], htu[npart-1], htv[npart-1]);
+  printf( "    results ( %10.8f %10.8f %10.8f %10.8f %10.8f %10.8f)\n", htu[0], htv[0], htu[1], htv[1], htu[npart-1], htv[npart-1]);
+  }
 
   // copy the results into temp vectors
   std::vector<FLOAT> htu_cpu(htu);
@@ -201,7 +216,7 @@ int main(int argc, char **argv) {
   FLOAT *dtx, *dty, *dtr;
   FLOAT *dtu, *dtv;
 
-  start = std::chrono::system_clock::now();
+  auto start = std::chrono::system_clock::now();
 
   // move over all source particles first
   const int32_t srcsize = npad*sizeof(FLOAT);
@@ -223,11 +238,7 @@ int main(int argc, char **argv) {
   dtr = dsr;
 
   // check
-  auto memerr = hipGetLastError();
-  if (memerr != hipSuccess) {
-    fprintf(stderr, "Failed to upload data (other): %s!\n", hipGetErrorString(memerr));
-    exit(EXIT_FAILURE);
-  }
+  if (true) gpuCheckCall(hipGetLastError());
 
   const dim3 blocksz(THREADS_PER_BLOCK, 1, 1);
   const dim3 gridsz(npad/THREADS_PER_BLOCK, 1, 1);
@@ -238,11 +249,7 @@ int main(int argc, char **argv) {
     hipLaunchKernelGGL(nvortex_2d_nograds_gpu, dim3(gridsz), dim3(blocksz), 0, 0, npad, dsx,dsy,dss,dsr, 0,dtx,dty,dtr,dtu,dtv);
 
     // check
-    auto err = hipGetLastError();
-    if (err != hipSuccess) {
-      fprintf(stderr, "Failed to launch kernel: %s!\n", hipGetErrorString(err));
-      exit(EXIT_FAILURE);
-    }
+    if (true) gpuCheckCall(hipGetLastError());
 
     // pull data back down
     hipMemcpy (htu.data(), dtu, trgsize, hipMemcpyDeviceToHost);
@@ -250,11 +257,11 @@ int main(int argc, char **argv) {
   }
 
   // time and report
-  end = std::chrono::system_clock::now();
-  elapsed_seconds = end-start;
-  time = elapsed_seconds.count();
+  auto end = std::chrono::system_clock::now();
+  std::chrono::duration<double> elapsed_seconds = end-start;
+  double time = elapsed_seconds.count();
   printf( "  device total time( %g s ) and flops( %g GFlop/s )\n", time, 1.e-9 * (double)npart*(4+14*(double)npart)/time);
-  printf( "    results ( %g %g %g %g %g %g)\n", htu[0], htv[0], htu[1], htv[1], htu[npart-1], htv[npart-1]);
+  printf( "    results ( %10.8f %10.8f %10.8f %10.8f %10.8f %10.8f )\n", htu[0], htv[0], htu[1], htv[1], htu[npart-1], htv[npart-1]);
 
   // free resources
   hipFree(dsx);
@@ -265,6 +272,7 @@ int main(int argc, char **argv) {
   hipFree(dtv);
 
   // compare results
+  if (compare) {
   FLOAT errsum = 0.0;
   FLOAT errmax = 0.0;
   for (int32_t i=0; i<npart; ++i) {
@@ -276,5 +284,6 @@ int main(int argc, char **argv) {
     }
   }
   printf( "  total host-device error ( %g ) max error ( %g )\n", std::sqrt(errsum/npart), errmax);
+  }
 }
 

@@ -285,7 +285,7 @@ int main(int argc, char **argv) {
   double time = elapsed_seconds.count();
 
   printf( "  host total time( %g s ) and flops( %g GFlop/s )\n", time, 1.e-9 * (double)npart*(7+20*(double)npart)/time);
-  printf( "    results ( %g %g %g %g %g %g)\n", htu[0], htv[0], htw[0], htu[npart-1], htv[npart-1], htw[npart-1]);
+  printf( "    results ( %10.8f %10.8f %10.8f %10.8f %10.8f %10.8f )\n", htu[0], htv[0], htw[0], htu[npart-1], htv[npart-1], htw[npart-1]);
   }
 
   // copy the results into temp vectors
@@ -347,11 +347,7 @@ int main(int argc, char **argv) {
     dtr[i] = dsr[i] + i*ntargperstrm;
 
     // check
-    //auto memerr = hipGetLastError();
-    //if (memerr != hipSuccess) {
-    //  fprintf(stderr, "Failed to upload data (other): %s!\n", hipGetErrorString(memerr));
-    //  exit(EXIT_FAILURE);
-    //}
+    if (false) gpuCheckCall(hipGetLastError());
   //}
 
   //for (int32_t i=0; i<nstreams; ++i) {
@@ -389,7 +385,7 @@ int main(int argc, char **argv) {
   std::chrono::duration<double> elapsed_seconds = end-start;
   double time = elapsed_seconds.count();
   printf( "  device total time( %g s ) and flops( %g GFlop/s )\n", time, 1.e-9 * (double)npart*(7+20*(double)npart)/time);
-  printf( "    results ( %g %g %g %g %g %g)\n", htu[0], htv[0], htw[0], htu[npart-1], htv[npart-1], htw[npart-1]);
+  printf( "    results ( %10.8f %10.8f %10.8f %10.8f %10.8f %10.8f )\n", htu[0], htv[0], htw[0], htu[npart-1], htv[npart-1], htw[npart-1]);
 
   // free resources, after timer
   for (int32_t i=0; i<nstreams; ++i) {

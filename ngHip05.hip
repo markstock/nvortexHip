@@ -193,7 +193,7 @@ __host__ int32_t buffer(const int32_t _n, const int32_t _align) {
 // main program
 
 static void usage() {
-  fprintf(stderr, "Usage: ngHip05.bin [-n=<num parts>] [-g=<num gpus>]\n");
+  fprintf(stderr, "Usage: ngHip05.bin [-n=<num parts>] [-g=<num gpus>] [-c]\n");
   exit(1);
 }
 
@@ -202,6 +202,7 @@ int main(int argc, char **argv) {
   // number of particles/points and gpus
   int32_t npart = 400000;
   int32_t force_ngpus = -1;
+  bool compare = false;
 
   for (int i=1; i<argc; i++) {
     if (strncmp(argv[i], "-n=", 3) == 0) {
@@ -212,6 +213,8 @@ int main(int argc, char **argv) {
       int32_t num = atof(argv[i]+3);
       if (num < 1 or num > MAX_GPUS) usage();
       force_ngpus = num;
+    } else if (strncmp(argv[i], "-c", 2) == 0) {
+      compare = true;
     }
   }
 
@@ -265,6 +268,7 @@ int main(int argc, char **argv) {
   // -------------------------
   // do a CPU version
 
+  if (compare) {
   auto start = std::chrono::system_clock::now();
 
   #pragma omp parallel for schedule(guided)
@@ -281,7 +285,8 @@ int main(int argc, char **argv) {
   double time = elapsed_seconds.count();
 
   printf( "  host total time( %g s ) and flops( %g GFlop/s )\n", time, 1.e-9 * (double)npart*(7+20*(double)npart)/time);
-  printf( "    results ( %g %g %g %g %g %g)\n", htu[0], htv[0], htw[0], htu[npart-1], htv[npart-1], htw[npart-1]);
+  printf( "    results ( %10.8f %10.8f %10.8f %10.8f %10.8f %10.8f )\n", htu[0], htv[0], htw[0], htu[npart-1], htv[npart-1], htw[npart-1]);
+  }
 
   // copy the results into temp vectors
   std::vector<FLOAT> htu_cpu(htu);
@@ -318,7 +323,7 @@ int main(int argc, char **argv) {
   const dim3 gridsz(ntargperstrm/THREADS_PER_BLOCK, nsrcblocks, 1);
 
   // to be fair, we start timer after allocation but before transfer
-  start = std::chrono::system_clock::now();
+  auto start = std::chrono::system_clock::now();
 
   // now perform the data movement and setting
   for (int32_t i=0; i<nstreams; ++i) {
@@ -342,11 +347,7 @@ int main(int argc, char **argv) {
     dtr[i] = dsr[i] + i*ntargperstrm;
 
     // check
-    //auto memerr = hipGetLastError();
-    //if (memerr != hipSuccess) {
-    //  fprintf(stderr, "Failed to upload data (other): %s!\n", hipGetErrorString(memerr));
-    //  exit(EXIT_FAILURE);
-    //}
+    if (false) gpuCheckCall(hipGetLastError());
   //}
 
   //for (int32_t i=0; i<nstreams; ++i) {
@@ -380,11 +381,11 @@ int main(int argc, char **argv) {
   if (false) gpuCheckCall( hipDeviceSynchronize() );
 
   // time and report
-  end = std::chrono::system_clock::now();
-  elapsed_seconds = end-start;
-  time = elapsed_seconds.count();
+  auto end = std::chrono::system_clock::now();
+  std::chrono::duration<double> elapsed_seconds = end-start;
+  double time = elapsed_seconds.count();
   printf( "  device total time( %g s ) and flops( %g GFlop/s )\n", time, 1.e-9 * (double)npart*(7+20*(double)npart)/time);
-  printf( "    results ( %g %g %g %g %g %g)\n", htu[0], htv[0], htw[0], htu[npart-1], htv[npart-1], htw[npart-1]);
+  printf( "    results ( %10.8f %10.8f %10.8f %10.8f %10.8f %10.8f )\n", htu[0], htv[0], htw[0], htu[npart-1], htv[npart-1], htw[npart-1]);
 
   // free resources, after timer
   for (int32_t i=0; i<nstreams; ++i) {
@@ -400,6 +401,7 @@ int main(int argc, char **argv) {
   }
 
   // compare results
+  if (compare) {
   FLOAT errsum = 0.0;
   FLOAT errmax = 0.0;
   for (int32_t i=0; i<npart; ++i) {
@@ -413,5 +415,6 @@ int main(int argc, char **argv) {
     }
   }
   printf( "  total host-device error ( %g ) max error ( %g )\n", std::sqrt(errsum/npart), errmax);
+  }
 }
 
