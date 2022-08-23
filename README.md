@@ -10,17 +10,17 @@ As long Rocm is installed and `hipcc` is in your PATH, you should be able to do:
 ## Hipify
 The first four of these codes were created from [nvortexCuda](https://github.com/markstock/nvortexCuda) using:
 
-    hipify-clang nvCuda04.cu -o=nvHip04.hip -v --cuda-path=[..] -I [..]/include
+    hipify-clang nvCuda04.cu -o=nvHip04.cpp -v --cuda-path=[..] -I [..]/include
 
 ## Description
 This repository contains a few progressive examples of a compute-only n-body calculation
 of the Biot-Savart influence of N desingularized vorticies on one another.
 
-Program `nvHip01.cu` is the simplest implementation. On the CPU side, the program parallelizes
+Program `nvHip01` is the simplest implementation. On the CPU side, the program parallelizes
 with a basic OpenMP `parallel for` loop over the target particles. On the GPU side, we use HIP
 without unified or pinned memory (full transfers), with one target particle per "thread."
 
-Program `nvHip02.cu` speeds this up considerably. The CPU now uses `omp simd` to vectorize the
+Program `nvHip02` speeds this up considerably. The CPU now uses `omp simd` to vectorize the
 inner loop over source particles. The GPU uses shared memory to load blocks of source particles
 in a coalesced manner before all threads operate on that block. This program represents the
 "80" part of the "80-20 rule": that you can go most of the way with some simple methods.
@@ -35,9 +35,16 @@ to write results back to main GPU memory. Finally, we added support for multiple
 six more by performing Kahan summation on the accumulators. This further reduces errors inherent
 in summing large arrays of numbers, but seems incompatible with the `omp simd` clause.
 
-Finally, `nvHip05` speeds up the CPU calculation by blocking (putting into hierarchical "blocks"),
+`nvHip05` speeds up the CPU calculation by blocking (putting into hierarchical "blocks"),
 which improves memory locality, especially for large N. This has the additional benefit of reducing
 the errors inherent in summing large sequences of numbers (so we remove Kahan summation).
 It also rearranges some of the asynchronous GPU calls to reduce total memory-move-and-execution time
 by a few percent for multi-gpu runs.
 
+`ngHip06` is a gravitation version of the N-body code, and adds the `__launch_bounds__` keyword,
+dispatches asynchronous calls to streams from multiple threads, and times the allocations.
+
+## Building on Cray
+    module load PrgEnv-amd
+    module use /global/opt/modulefiles
+    module load rocm/5.2.0

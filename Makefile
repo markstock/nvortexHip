@@ -13,10 +13,10 @@ BINS=nvHip01.bin nvHip02.bin nvHip03.bin nvHip04.bin nvHip05.bin ngHip05.bin ngH
 
 all : $(BINS)
 
-%.bin : %.hip
+%.bin : %.cpp
 	$(HIPCC) $(ARCH) $(HIPCCFLAGS) $(CXXFLAGS) -o $@ $^
 
-nvHip04.bin : nvHip04.hip
+nvHip04.bin : nvHip04.cpp
 	$(HIPCC) $(ARCH) $(HIPCCFLAGS) $(KAHANFLAGS) $(CXXFLAGS) -o $@ $^
 
 clean :
