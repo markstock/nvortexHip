@@ -251,6 +251,8 @@ int main(int argc, char **argv) {
   //std::mt19937 rng(dev());
   std::mt19937 rng(1234);
   std::uniform_real_distribution<FLOAT> xrand(0.0,1.0);
+  {
+  auto start = std::chrono::system_clock::now();
   for (int32_t i = 0; i < npart; ++i)    hsx[i] = xrand(rng);
   for (int32_t i = npart; i < npad; ++i) hsx[i] = 0.0;
   for (int32_t i = 0; i < npart; ++i)    hsy[i] = xrand(rng);
@@ -264,6 +266,11 @@ int main(int argc, char **argv) {
   for (int32_t i = 0; i < npad; ++i)     htu[i] = 0.0;
   for (int32_t i = 0; i < npad; ++i)     htv[i] = 0.0;
   for (int32_t i = 0; i < npad; ++i)     htw[i] = 0.0;
+  auto end = std::chrono::system_clock::now();
+  std::chrono::duration<double> elapsed_seconds = end-start;
+  double time = elapsed_seconds.count();
+  printf( "  host alloc time( %g s )\n", time);
+  }
 
   // -------------------------
   // do a CPU version
@@ -284,7 +291,7 @@ int main(int argc, char **argv) {
   std::chrono::duration<double> elapsed_seconds = end-start;
   double time = elapsed_seconds.count();
 
-  printf( "  host total time( %g s ) and flops( %g GFlop/s )\n", time, 1.e-9 * (double)npart*(7+20*(double)npart)/time);
+  printf( "  host compute time( %g s ) and flops( %g GFlop/s )\n", time, 1.e-9 * (double)npart*(7+20*(double)npart)/time);
   printf( "    results ( %10.8f %10.8f %10.8f %10.8f %10.8f %10.8f )\n", htu[0], htv[0], htw[0], htu[npart-1], htv[npart-1], htw[npart-1]);
   }
 
@@ -301,10 +308,13 @@ int main(int argc, char **argv) {
   FLOAT *dtx[MAX_GPUS], *dty[MAX_GPUS], *dtz[MAX_GPUS], *dtr[MAX_GPUS];
   FLOAT *dtu[MAX_GPUS], *dtv[MAX_GPUS], *dtw[MAX_GPUS];
   hipStream_t stream[MAX_GPUS];
-
-  // allocate space for all sources, part of targets
   const int32_t srcsize = nsrcpad*sizeof(FLOAT);
   const int32_t trgsize = ntargperstrm*sizeof(FLOAT);
+
+  {
+  auto start = std::chrono::system_clock::now();
+  // allocate space for all sources, part of targets
+  #pragma omp parallel for schedule(static,1) num_threads(nstreams)
   for (int32_t i=0; i<nstreams; ++i) {
     hipSetDevice(i);
     hipStreamCreate(&stream[i]);
@@ -318,6 +328,11 @@ int main(int argc, char **argv) {
     hipMalloc (&dtv[i], trgsize);
     hipMalloc (&dtw[i], trgsize);
   }
+  auto end = std::chrono::system_clock::now();
+  std::chrono::duration<double> elapsed_seconds = end-start;
+  double time = elapsed_seconds.count();
+  printf( "  device alloc time( %g s )\n", time);
+  }
 
   const dim3 blocksz(THREADS_PER_BLOCK, 1, 1);
   const dim3 gridsz(ntargperstrm/THREADS_PER_BLOCK, nsrcblocks, 1);
@@ -326,6 +341,7 @@ int main(int argc, char **argv) {
   auto start = std::chrono::system_clock::now();
 
   // now perform the data movement and setting
+  #pragma omp parallel for schedule(static,1) num_threads(nstreams)
   for (int32_t i=0; i<nstreams; ++i) {
 
     hipSetDevice(i);
@@ -364,6 +380,7 @@ int main(int argc, char **argv) {
   }
 
   // moving these calls inside of the kernel loop slows things down a lot
+  #pragma omp parallel for schedule(static,1) num_threads(nstreams)
   for (int32_t i=0; i<nstreams; ++i) {
     // pull data back down
     hipMemcpyAsync (htu.data() + i*ntargperstrm, dtu[i], trgsize, hipMemcpyDeviceToHost, stream[i]);
@@ -384,7 +401,7 @@ int main(int argc, char **argv) {
   auto end = std::chrono::system_clock::now();
   std::chrono::duration<double> elapsed_seconds = end-start;
   double time = elapsed_seconds.count();
-  printf( "  device total time( %g s ) and flops( %g GFlop/s )\n", time, 1.e-9 * (double)npart*(7+20*(double)npart)/time);
+  printf( "  device comm+comp time( %g s ) and flops( %g GFlop/s )\n", time, 1.e-9 * (double)npart*(7+20*(double)npart)/time);
   printf( "    results ( %10.8f %10.8f %10.8f %10.8f %10.8f %10.8f )\n", htu[0], htv[0], htw[0], htu[npart-1], htv[npart-1], htw[npart-1]);
 
   // free resources, after timer
