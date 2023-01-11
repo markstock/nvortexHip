@@ -5,7 +5,8 @@ ARCH=--offload-arch=gfx90a
 #ARCH=--offload-arch=gfx908
 # -Ofast is not as good as -O2
 HIPCCFLAGS=-O2 -ffast-math -flto
-CXXFLAGS=-march=native -fopenmp -fomit-frame-pointer
+#CXXFLAGS=-march=native -fopenmp -fomit-frame-pointer
+CXXFLAGS=-march=native -fopenmp
 # we need this to prevent skipping Kahan summation altogether
 KAHANFLAGS=-fno-associative-math
 
@@ -20,4 +21,4 @@ nvHip04.bin : nvHip04.cpp
 	$(HIPCC) $(ARCH) $(HIPCCFLAGS) $(KAHANFLAGS) $(CXXFLAGS) -o $@ $^
 
 clean :
-	rm $(BINS)
+	rm -f $(BINS)
