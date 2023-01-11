@@ -48,3 +48,6 @@ dispatches asynchronous calls to streams from multiple threads, and times the al
     module load PrgEnv-amd
     module use /global/opt/modulefiles
     module load rocm/5.2.0
+
+Run on a slurm system with
+    srun -N1 -n1 --exclusive --cpus-per-task=64 --threads-per-core=1 ./ngHip06.bin -n=800000 -c
