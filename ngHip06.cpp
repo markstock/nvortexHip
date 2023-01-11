@@ -9,6 +9,9 @@
 #include <vector>
 #include <random>
 #include <chrono>
+#include <iostream>
+#include <sched.h>
+#include <omp.h>
 
 #include <hip/hip_runtime.h>
 
@@ -310,14 +313,31 @@ int main(int argc, char **argv) {
   hipStream_t stream[MAX_GPUS];
   const int32_t srcsize = nsrcpad*sizeof(FLOAT);
   const int32_t trgsize = ntargperstrm*sizeof(FLOAT);
+  const std::vector<int32_t> gpubind = {4,5,2,3,6,7,0,1};
 
   {
   auto start = std::chrono::system_clock::now();
   // allocate space for all sources, part of targets
   #pragma omp parallel for schedule(static,1) num_threads(nstreams)
   for (int32_t i=0; i<nstreams; ++i) {
-    hipSetDevice(i);
+
+    // linear device setting, openmp thread = gpuid
+    //const int gpuid = i;
+    // account for nearest GPU
+    const int gpuid = gpubind[sched_getcpu()/8];
+    hipSetDevice(gpuid);
+
+    auto scstart = std::chrono::system_clock::now();
+    //std::cout << "  omp thread " << omp_get_thread_num() << " on cpu " << sched_getcpu() << " creating stream " << i << std::endl;
+
+    // standard launch, synchronous? allocates on heap
     hipStreamCreate(&stream[i]);
+    // with non-blocking flag - very little difference under openmp
+    //hipStreamCreateWithFlags(&stream[i], hipStreamNonBlocking);
+
+    auto scend = std::chrono::system_clock::now();
+    std::chrono::duration<double> scelapsed_seconds = scend-scstart;
+    std::cout << "  omp thread " << omp_get_thread_num() << " on cpu " << sched_getcpu() << " finished stream " << i << " on gpu " << gpuid << " in " << scelapsed_seconds.count() << std::endl;
 
     hipMalloc (&dsx[i], srcsize);
     hipMalloc (&dsy[i], srcsize);
