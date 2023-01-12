@@ -7,6 +7,11 @@ As long Rocm is installed and `hipcc` is in your PATH, you should be able to do:
     make
     ./nvHip05.bin -n=100000
 
+Or with cmake, make a build directory and try:
+
+    cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_COMPILER=hipcc -DCMAKE_CXX_FLAGS=" -fopenmp --amdgpu-target=gfx90a" ..
+    make
+
 ## Hipify
 The first four of these codes were created from [nvortexCuda](https://github.com/markstock/nvortexCuda) using:
 
@@ -50,4 +55,5 @@ dispatches asynchronous calls to streams from multiple threads, and times the al
     module load rocm/5.2.0
 
 Run on a slurm system with
+
     srun -N1 -n1 --exclusive --cpus-per-task=64 --threads-per-core=1 ./ngHip06.bin -n=800000 -c
