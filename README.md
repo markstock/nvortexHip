@@ -7,7 +7,7 @@ As long Rocm is installed and `hipcc` is in your PATH, you should be able to do:
     make
     ./nvHip05.bin -n=100000
 
-Or with cmake, make a build directory and try:
+Or with cmake, make a build directory and try (with the right GPU target):
 
     cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_COMPILER=hipcc -DCMAKE_CXX_FLAGS=" -fopenmp --amdgpu-target=gfx90a" ..
     make
