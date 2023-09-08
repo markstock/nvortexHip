@@ -23,7 +23,7 @@
 #define CPU_TRG_BLK 32
 
 // threads per block (hard coded)
-#define THREADS_PER_BLOCK 256
+#define THREADS_PER_BLOCK 512
 
 // GPU count limit
 #define MAX_GPUS 8
@@ -92,11 +92,15 @@ __global__ void ngrav_3d_nograds_gpu(
     // this reduces VGPR use, but does not improve performance
     //#pragma unroll 1
     for (int32_t j=0; j<THREADS_PER_BLOCK; ++j) {
-      FLOAT dx = s_sx[j] - tx[i];
-      FLOAT dy = s_sy[j] - ty[i];
-      FLOAT dz = s_sz[j] - tz[i];
-      FLOAT distsq = dx*dx + dy*dy + dz*dz + s_sr[j]*s_sr[j] + tr2;
-      FLOAT factor = s_ss[j] * RSQRT(distsq) / distsq;
+      const FLOAT dx = s_sx[j] - tx[i];
+      const FLOAT dy = s_sy[j] - ty[i];
+      const FLOAT dz = s_sz[j] - tz[i];
+      const FLOAT distsq = dx*dx + dy*dy + dz*dz + s_sr[j]*s_sr[j] + tr2;
+      // this extra flop improves time by >10%
+      const FLOAT invR = RSQRT(distsq);
+      const FLOAT invR2 = invR*invR;
+      const FLOAT factor = s_ss[j] * invR * invR2;
+      //FLOAT factor = s_ss[j] * RSQRT(distsq) / distsq;
       locu += dx * factor;
       locv += dy * factor;
       locw += dz * factor;
@@ -384,7 +388,7 @@ int main(int argc, char **argv) {
   auto end = std::chrono::system_clock::now();
   std::chrono::duration<double> elapsed_seconds = end-start;
   double time = elapsed_seconds.count();
-  printf( "  device total time( %g s ) and flops( %g GFlop/s )\n", time, 1.e-9 * (double)npart*(7+20*(double)npart)/time);
+  printf( "  device total time( %g s ) and flops( %g GFlop/s )\n", time, 1.e-9 * (double)npart*(7+21*(double)npart)/time);
   printf( "    results ( %10.8f %10.8f %10.8f %10.8f %10.8f %10.8f )\n", htu[0], htv[0], htw[0], htu[npart-1], htv[npart-1], htw[npart-1]);
 
   // free resources, after timer
