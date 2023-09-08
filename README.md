@@ -46,8 +46,24 @@ the errors inherent in summing large sequences of numbers (so we remove Kahan su
 It also rearranges some of the asynchronous GPU calls to reduce total memory-move-and-execution time
 by a few percent for multi-gpu runs.
 
+### 3D Gravitation versions
+`ngHip04` is a modification of `ngHip05` that uses Kahan summation for improved accuracy - but the 
+Kahan summation seems to be optimized out, as the results between these two are identical.
+
+`ngHip05` is the baseline 3D gravitation code, made from the `nvHip05` code, which includes blocking
+for the CPU calculation and using shared memory to store chunks of source particles for re-use.
+
 `ngHip06` is a gravitation version of the N-body code, and adds the `__launch_bounds__` keyword,
 dispatches asynchronous calls to streams from multiple threads, and times the allocations.
+
+`ngHip08` is identical to `ngHip05` except that is uses warp shuffle commands to read source particle
+data instead of shared memory. This has been reported to be faster, but here it is not.
+
+`ngHip09` is also identical to `ngHip05`, but it explicitly uses float2 operations in an effort to 
+eke out more performance on MI-250X. No other Instinct accelerator has special float2 units.
+
+`ngHip10` does the same as `ngHip09` but uses explicit float4 variables to further unroll the loops.
+Surprisingly, this improves performance further.
 
 ## Building on Cray
     module load PrgEnv-amd
