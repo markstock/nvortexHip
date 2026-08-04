@@ -1,14 +1,16 @@
 /*
- * ngHip05.hip
+ * ngHip09.hip
  *
  * (c)2022 Mark J. Stock <markjstock@gmail.com>
  *
- * v0.5  blocking the cpu calculation for data locality and improved summation accuracy, reordering gpu calls
+ * v0.9  explicit float2 variables
  */
 
 #include <vector>
 #include <random>
 #include <chrono>
+#include <cassert>
+#include <cstring>
 
 #include <hip/hip_runtime.h>
 

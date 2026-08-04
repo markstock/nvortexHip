@@ -10,6 +10,8 @@
 #include <random>
 #include <chrono>
 #include <iostream>
+#include <cassert>
+#include <cstring>
 #include <sched.h>
 #include <omp.h>
 

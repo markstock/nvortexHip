@@ -9,6 +9,8 @@
 #include <vector>
 #include <random>
 #include <chrono>
+#include <cassert>
+#include <cstring>
 
 #include <omp.h>
 
