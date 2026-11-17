@@ -1,0 +1,82 @@
+name: GPU Simulator
+
+# Builds the HIP gravitational-summation programs for gfx942 and runs them on a
+# simulated AMD Instinct MI300X (https://github.com/pantheongpu/pantheonsim).
+# Each program computes the sum on the CPU and on the GPU; with -c it prints the
+# host-device error, and this job fails if that error is missing or too large.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - "src/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/gpu-sim.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  hip:
+    name: HIP (ROCm 7.1 and simulated MI300X)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+
+      - name: Set up the simulated GPU and ROCm
+        uses: pantheongpu/setup-pantheonsim@deff5781e8adfd83dec98dd5242dcbc96a564773 # v0.1.10
+        with:
+          gpu: amd/mi300x
+          cuda-toolkit: none
+          rocm: "7.1"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libomp-dev
+
+      # ngHip04 is left out: it uses assert without including <cassert> and does
+      # not compile with this ROCm.
+      - name: Configure and build
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=hipcc \
+            -DCMAKE_HIP_ARCHITECTURES=gfx942
+          cmake --build build -j3 --target \
+            ngHip05.bin ngHip06.bin ngHip07.bin ngHip08.bin ngHip09.bin ngHip10.bin
+
+      - name: Run and compare GPU against CPU
+        run: |
+          set -o pipefail
+          for prog in ngHip05 ngHip06 ngHip07 ngHip08 ngHip09 ngHip10; do
+            echo "::group::$prog"
+            vgpu run ./build/$prog.bin -n=4096 -g=1 -c 2>&1 | tee "$prog.log"
+            echo "::endgroup::"
+            if grep -qiE "VirtualGPU error|no device|GPU error" "$prog.log"; then
+              echo "::error::$prog reported a device error"; exit 1
+            fi
+            line=$(grep "total host-device error" "$prog.log" || true)
+            if [ -z "$line" ]; then
+              echo "::error::$prog printed no host-device error line"; exit 1
+            fi
+            if echo "$line" | grep -qiE "nan|inf"; then
+              echo "::error::$prog host-device error is not finite"; exit 1
+            fi
+            echo "$line" | awk -v p="$prog" '{
+              rms = $5 + 0; mx = $10 + 0
+              if (!(rms < 1e-4 && mx < 1e-3)) {
+                printf "::error::%s host-device error too large (rms %g, max %g)\n", p, rms, mx
+                exit 1
+              }
+            }'
+          done
